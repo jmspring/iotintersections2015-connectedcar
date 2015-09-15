@@ -48,8 +48,8 @@ Adafruit_GPS GPS(&GPSSerial);
 
 // GPRS and Service information
 uint32_t gprsConnectTimeout = 10000; // timeout in milliseconds.
-char *apn = "fast.t-mobile.com";
-char *server = "jims-carcloud.cloudapp.net";
+char *apn = "your apn";
+char *server = "your server";
 uint16_t port = 8080;
 char *path = "/checkin";
 LGPRSClient connectionClient;

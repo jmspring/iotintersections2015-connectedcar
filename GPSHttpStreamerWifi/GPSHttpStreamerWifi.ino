@@ -1,4 +1,4 @@
-// A simple GPS data streamer over GPRS and MQTT
+// A simple GPS data streamer over Wifi and HTTP
 //
 // This code is written to work with the Linkit One board and 
 // the Adafruit Ultimate GPS v3 unit.
@@ -11,20 +11,28 @@
 //  - A Linkit One development board
 //  - The Adafruit Ultimate GPS v3 connected into Serial1 (D0 & D1)
 //      - Specific pin mapping: GPS Tx -> D0, GPS Rx -> D1
-//  - A SIM card installed into the Linkit One
+//  - A wifi network
 //
 // If playing with a GPS indoors, it is helpful to have an antenna 
 // attached to the GPS unit.
 
 #include "LTcpClient.h"
-#include "LGPRSClient.h"
-#include "LGPRS.h"
+#include <LTask.h>
+#include <LWiFi.h>
+#include <LWiFiClient.h>
 
 #include <Adafruit_GPS.h>
 
-#include <PubSubClient.h>
-
 #include <time.h>
+
+// buffer information.  
+// setting the max data to buffer
+#define BUFFER_SIZE     2048
+uint8_t dataBuffer[BUFFER_SIZE];
+uint32_t bufferPos;
+
+// which pins are used
+#define chipSelect 10
 
 // gps information
 #define GPSSerial Serial1
@@ -39,15 +47,16 @@ Adafruit_GPS GPS(&GPSSerial);
 // gathered the more data will be logged.
 #define GPS_UPDATE_FREQUENCY_HZ 1
 
-// GPRS and Service information
-uint32_t gprsConnectTimeout = 10000; // timeout in milliseconds.
-char *apn = "your apn";
-char *server = "your server";
-uint16_t port = 1883;
-char *mqtt_id = "gpsmqttstreamer";
-char *mqtt_publish_topic = "location";
-LGPRSClient radioClient;
-PubSubClient mqttClient(radioClient);
+// Wifi and Service information
+#define WIFI_AP "wifi access point name"
+#define WIFI_PASSWORD "wifi access point pasword"
+#define WIFI_AUTH LWIFI_WPA  // choose from LWIFI_OPEN, LWIFI_WPA, or LWIFI_WEP.
+uint32_t wifiConnectTimeout = 10000; // timeout in milliseconds.
+char *server = "server name";
+uint16_t port = 8080;
+char *path = "/checkin";
+LWiFiClient connectionClient;
+bool newConnectionEachSend = false;    // force a connect every time
 
 // an error occurred, just stop processing and loop
 void error(char *message)
@@ -71,39 +80,81 @@ long date_to_timestamp(uint8_t year, uint8_t month, uint8_t day, uint8_t hour, u
   return r;
 }
 
-void mqtt_callback(char* topic, byte* payload, unsigned int length) {
-  // print the topic
-  Serial.print("Message arrived.");
-  Serial.print("Topic: ");
-  Serial.println(topic);
-
-  // print the payload
-  Serial.println("Payload:");
-  Serial.println("  ");
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-}
-
-void mqtt_connect(void) {
-  while(!mqttClient.connected()) {
-    Serial.println("Attempting to set up MQTT connection.");
-
-    // attempt to connect
-    if(mqttClient.connect(mqtt_id)) {
-      Serial.println("Connected...");
-
-      // we aren't subscribing to anything, otherwise
-      // you would do so here
-    } else {
-      Serial.print("Connection failed.  Error: ");
-      Serial.println(mqttClient.state());
-      Serial.println("Will try again in 5 seconds...");
-
-      delay(5000);
+bool send_data(void)
+{
+  bool r = true;
+  
+  // connect the socket
+  Serial.println("connecting...");
+  if(!connectionClient.connected()) {
+    if(!connectionClient.connect(server, port)) {
+      Serial.println("Unable to connect to server.");
+      r = false;
     }
   }
+
+  // manual http request, we won't care about the response
+  if(r) {
+    Serial.println("sending header...");
+    char requestHeader[512];
+    if(newConnectionEachSend) {
+      sprintf(requestHeader, "POST %s HTTP/1.1\r\n"
+                         "Host: %s\r\n"
+                         "Connection: close\r\n"
+                         "Content-Type: text/plain\r\n"
+                         "Content-Length: %ld\r\n"
+                         "\r\n", 
+                         path, server, bufferPos);
+    } else {
+      sprintf(requestHeader, "POST %s HTTP/1.1\r\n"
+                         "Host: %s\r\n"
+                         "Connection: Keep-Alive\r\n"
+                         "Content-Type: text/plain\r\n"
+                         "Content-Length: %ld\r\n"
+                         "\r\n", 
+                         path, server, bufferPos);      
+    }
+    int t;
+    t = connectionClient.write((uint8_t *)requestHeader, strlen(requestHeader));
+    if(t != strlen(requestHeader)) {
+        Serial.println("Unable to send HTTP header.");
+        r = false;
+    } else {
+      Serial.println("sending body...");
+      int idx = 0;
+      while(idx != bufferPos) {
+        t = connectionClient.write((uint8_t *)(dataBuffer + idx), bufferPos - idx);
+        if(t <= 0) {
+          Serial.println("Sending body failed.");
+          r = false;
+          break;
+        } else {
+          idx += t;
+        }
+      }
+
+      // if we still haven't errored, read the result
+      if(r) {
+        Serial.println("reading response...");
+        // give server a bit of time to respond
+        long start = millis();
+        while((millis() - start < 5000) && !connectionClient.available()) {
+          delay(100);
+        }
+        
+        while(connectionClient.available()) {
+          char c = connectionClient.read();
+          Serial.print(c);
+        }
+      }
+    }
+  }
+
+  if(!r || newConnectionEachSend) {
+    connectionClient.stop();
+  }
+
+  return r;
 }
 
 void setup() {
@@ -127,19 +178,18 @@ void setup() {
     error("Invalid GPS config.");
   }
 
-  // setup GPRS connection
-  Serial.println("Connecting to GPRS network.");
+  // setup Wifi connection
+  Serial.println("Connecting to Wifi network.");
   uint32_t start = millis();
-  if(!LGPRS.attachGPRS(apn, NULL, NULL)) {
-    delay(500);
+  while (0 == LWiFi.connect(WIFI_AP, LWiFiLoginInfo(WIFI_AUTH, WIFI_PASSWORD))) {
     if(millis() - start > 10000) {
-      error("Unable to connect to GPRS network.");
+      error("Unable to connect to Wifi network.");
     }
   }
 
-  // setup MQTT client
-  mqttClient.setServer(server, port);
-  mqttClient.setCallback(mqtt_callback);
+  // setup data buffer
+  memset(dataBuffer, 0, BUFFER_SIZE);
+  bufferPos = 0;
 }
 
 struct gps_info_t {
@@ -181,12 +231,6 @@ void gps_info_update(void) {
 }
 
 void loop() {
-  // enable mqtt connect and some processing
-  if(!mqttClient.connected()) {
-    mqtt_connect();
-  }
-  mqttClient.loop();
-  
   // arduino runs the loop continuously.  given the speed of the
   // processor, the GPS will not be providing data faster than the
   // loop will run.
@@ -218,15 +262,21 @@ void loop() {
           char statement[256];
           long timestamp = date_to_timestamp(gpsInfo.year, gpsInfo.month, gpsInfo.day,
                                              gpsInfo.hour, gpsInfo.minute, gpsInfo.seconds);
-          sprintf(statement, "ts:%ld%03u;lat:%f;lon,%f;spd,%f;head,%f;alt,%f",
+          sprintf(statement, "type,location;timestamp,%ld%03u;latitude,%f;longitude,%f;speed,%f;heading,%f;altitude,%f",
                   timestamp, gpsInfo.milliseconds, gpsInfo.latitude, gpsInfo.longitude, gpsInfo.speed, gpsInfo.angle, gpsInfo.altitude);
           uint32_t length = (uint32_t)strlen(statement);
-
-          Serial.print("Publishing: ");
-          Serial.println(statement);
-          if(!mqttClient.publish(mqtt_publish_topic, statement)) {
-            Serial.println("Unable to publish statement.");
+    
+          if(bufferPos + length + 1 > BUFFER_SIZE) {
+            if(!send_data()) {
+              char s[60];
+              sprintf(s, "Error sending data to server.  Length: %u", bufferPos);
+              Serial.println(s);
+            }
+            bufferPos = 0;
           }
+          memcpy(dataBuffer + bufferPos, statement, length);
+          dataBuffer[bufferPos + length] = '\n';
+          bufferPos = bufferPos + length + 1;
         }
       }
     }

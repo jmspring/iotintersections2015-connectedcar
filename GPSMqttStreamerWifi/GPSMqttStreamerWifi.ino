@@ -1,4 +1,4 @@
-// A simple GPS data streamer over GPRS and MQTT
+// A simple GPS data streamer over Wifi and MQTT
 //
 // This code is written to work with the Linkit One board and 
 // the Adafruit Ultimate GPS v3 unit.
@@ -11,14 +11,14 @@
 //  - A Linkit One development board
 //  - The Adafruit Ultimate GPS v3 connected into Serial1 (D0 & D1)
 //      - Specific pin mapping: GPS Tx -> D0, GPS Rx -> D1
-//  - A SIM card installed into the Linkit One
+//  - A Wifi Network
 //
 // If playing with a GPS indoors, it is helpful to have an antenna 
 // attached to the GPS unit.
 
-#include "LTcpClient.h"
-#include "LGPRSClient.h"
-#include "LGPRS.h"
+#include <LTask.h>
+#include <LWiFi.h>
+#include <LWiFiClient.h>
 
 #include <Adafruit_GPS.h>
 
@@ -39,14 +39,16 @@ Adafruit_GPS GPS(&GPSSerial);
 // gathered the more data will be logged.
 #define GPS_UPDATE_FREQUENCY_HZ 1
 
-// GPRS and Service information
-uint32_t gprsConnectTimeout = 10000; // timeout in milliseconds.
-char *apn = "your apn";
+// Wifi and Service information
+uint32_t wifiConnectTimeout = 10000; // timeout in milliseconds.
+#define WIFI_AP "access point name"
+#define WIFI_PASSWORD "access point password"
+#define WIFI_AUTH LWIFI_WPA  // choose from LWIFI_OPEN, LWIFI_WPA, or LWIFI_WEP.
 char *server = "your server";
 uint16_t port = 1883;
-char *mqtt_id = "gpsmqttstreamer";
+char *mqtt_id = "mqttstreamerid";
 char *mqtt_publish_topic = "location";
-LGPRSClient radioClient;
+LWiFiClient radioClient;
 PubSubClient mqttClient(radioClient);
 
 // an error occurred, just stop processing and loop
@@ -126,14 +128,12 @@ void setup() {
   } else {
     error("Invalid GPS config.");
   }
-
-  // setup GPRS connection
-  Serial.println("Connecting to GPRS network.");
+  // setup Wifi connection
+  Serial.println("Connecting to Wifi network.");
   uint32_t start = millis();
-  if(!LGPRS.attachGPRS(apn, NULL, NULL)) {
-    delay(500);
+  while (0 == LWiFi.connect(WIFI_AP, LWiFiLoginInfo(WIFI_AUTH, WIFI_PASSWORD))) {
     if(millis() - start > 10000) {
-      error("Unable to connect to GPRS network.");
+      error("Unable to connect to Wifi network.");
     }
   }
 
