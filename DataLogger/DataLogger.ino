@@ -129,10 +129,10 @@ void setup() {
   GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
   if(GPS_UPDATE_FREQUENCY_HZ == 1) {
     GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
-    GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
+    GPS.sendCommand(PMTK_API_SET_FIX_CTL_1HZ);
   } else if(GPS_UPDATE_FREQUENCY_HZ == 5) {
-    GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
-    GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
+    GPS.sendCommand(PMTK_SET_NMEA_UPDATE_5HZ);
+    GPS.sendCommand(PMTK_API_SET_FIX_CTL_5HZ);
   } else {
     error("Invalid GPS config.");
   }
